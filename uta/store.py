@@ -278,17 +278,28 @@ class Store:
                 results.append(receipt)
         return results
 
+    @staticmethod
+    def _events(db: sqlite3.Connection, account_id: str) -> list[JsonObject]:
+        rows = db.execute(
+            """SELECT version, command_id, expected_version, command, result, created_at
+               FROM uta_events WHERE account_id = ? ORDER BY version""",
+            (account_id,),
+        )
+        return [dict(row, command=_decode(row["command"]), result=_decode(row["result"])) for row in rows]
+
     def events(self, account_id: str) -> list[JsonObject]:
         """Return the committed audit entries in per-account version order."""
         _identifier(account_id, "account ID")
         with self._connection() as db:
             self._account(db, account_id)
-            rows = db.execute(
-                """SELECT version, command_id, expected_version, command, result, created_at
-                   FROM uta_events WHERE account_id = ? ORDER BY version""",
-                (account_id,),
-            )
-            return [dict(row, command=_decode(row["command"]), result=_decode(row["result"])) for row in rows]
+            return self._events(db, account_id)
+
+    def read_for_replay(self, account_id: str) -> tuple[JsonObject, list[JsonObject]]:
+        """Read the account snapshot and its audit history in one read transaction."""
+        _identifier(account_id, "account ID")
+        with self._connection() as db:
+            snapshot = self._snapshot(self._account(db, account_id))
+            return snapshot, self._events(db, account_id)
 
 
 class ShardedStore:
@@ -360,6 +371,9 @@ class ShardedStore:
 
     def events(self, account_id: str) -> list[JsonObject]:
         return self._for_account(account_id).events(account_id)
+
+    def read_for_replay(self, account_id: str) -> tuple[JsonObject, list[JsonObject]]:
+        return self._for_account(account_id).read_for_replay(account_id)
 
     def apply_many(self, items: Sequence[Command]) -> list[Receipt]:
         """Commit per-shard command groups concurrently without cross-shard atomicity."""

@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Barrier
 import unittest
+from unittest.mock import patch
 
 from uta.simulator import Simulator, SimulatorError
 from uta.store import StoreConflict
@@ -107,6 +108,24 @@ class SimulatorTests(unittest.TestCase):
         self.assertFalse(receipt["liquidation_pending"])
         self.assertFalse(self.sim.view("account")["state"]["positions"])
         self.assertEqual(self.sim.verify_replay("account")["events_verified"], 5)
+
+    def test_replay_verifies_its_captured_version_during_another_commit(self):
+        self.place("buy", "0.1")
+        writer = Simulator(self.path, clock=lambda: self.now)
+        read_account = self.sim.store._account
+
+        def read_with_concurrent_commit(db, account_id):
+            row = read_account(db, account_id)
+            if row["version"] == 1:
+                writer.execute("account", "cancel", 1, {"type": "cancel_order", "order_id": "buy"})
+            return row
+
+        with patch.object(self.sim.store, "_account", side_effect=read_with_concurrent_commit):
+            self.assertEqual(self.sim.verify_replay("account"),
+                             {"account_id": "account", "version": 1, "events_verified": 2})
+
+        self.assertEqual(self.sim.verify_replay("account"),
+                         {"account_id": "account", "version": 2, "events_verified": 3})
 
     def test_fifo_partial_fills_and_reversal_keep_exact_cost(self):
         self.place("buy-A", "0.03", "60000", "0")

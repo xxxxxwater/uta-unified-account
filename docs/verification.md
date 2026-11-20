@@ -12,7 +12,7 @@
 | 经典账户导入、总资产与借款分别保留、冻结余额拒绝 | [test_shadow_adapter.py](../tests/test_shadow_adapter.py)、[test_simulator.py](../tests/test_simulator.py) | 导入是新模拟账户创世，不证明来源接口构成原子快照 |
 | 独立连接争抢相同账户版本，审计失败时状态回滚 | [test_store.py](../tests/test_store.py) | 本地 SQLite 并发与故障注入；未覆盖断电或跨主机共识 |
 | FIFO 部分成交、反向开仓、撤单和清算分录 | [test_simulator.py](../tests/test_simulator.py) | 人工注入成交与固定滑点，未接入真实撮合 |
-| 重开数据库后的命令幂等、记录时间回放和快照比较 | [test_store.py](../tests/test_store.py)、[test_simulator.py](../tests/test_simulator.py) | 兼容当前模型和命令历史，不是外部会计真实性证明 |
+| 重开数据库后的命令幂等、记录时间回放和同一事务读取的快照比较 | [test_store.py](../tests/test_store.py)、[test_simulator.py](../tests/test_simulator.py) | 验证当前模型与命令历史的一致性 |
 | 分片路由固定、丢失分片拒绝、组提交保存点与分片独立失败 | [test_store.py](../tests/test_store.py) | 无跨分片原子事务或在线重新分片 |
 | HTTP 信封、同源校验、批量逐项回执与过载退避 | [test_server.py](../tests/test_server.py) | 本机 HTTP 测试，不证明互联网服务鉴权或持续容量 |
 

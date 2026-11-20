@@ -82,23 +82,21 @@ sequenceDiagram
     participant D as Store
     participant T as _transition
     C->>R: account_id
-    R->>D: 按账户版本读取已提交事件前缀
-    D-->>R: 版本 0 创世状态与后续命令、回执
+    R->>D: 在同一只读事务中读取快照与事件
+    D-->>R: 账户快照、版本 0 创世状态与后续命令、回执
     loop 每个后续事件
         R->>R: 检查 expected_version 与连续版本
         R->>T: 原 command_id、command、记录的 evaluated_at
         T-->>R: 重算状态与回执
         R->>R: 逐字段比较重算回执与已存回执
     end
-    R->>D: 读取当前账户快照
-    D-->>R: 当前状态与版本
-    R->>R: 比较回放状态与当前快照
+    R->>R: 比较回放状态与已读取的快照
     R-->>C: account_id、version、events_verified 或错误
 ```
 
-回放使用命令原来的决策时间，避免重启后把历史行情误判为过期；它只重算，不重新下单或写事件。事件读取与最后的快照读取不是同一次只读事务，期间有新命令提交可能导致比较失败，错误会提示重试。回放依赖当前代码对历史模型、参数和命令的兼容性；不能把成功回放当作外部行情或会计真实性证明。
+回放在同一只读事务内获取快照与事件，关闭事务后使用命令原来的决策时间重算，避免重启后把历史行情误判为过期。结果返回此次核对的账户版本，后续提交会在下次回放中核对。核对范围是当前模型、参数与已记录的命令和快照之间的一致性。
 
-依据：[Simulator.verify_replay](../uta/simulator.py)、[Store.events](../uta/store.py)。可运行以下完整情景；第二条命令使用保留下来的数据库、账户和相同分片数：
+下面的第二条命令使用保留下来的数据库、账户和相同分片数。实现见 [Simulator.verify_replay](../uta/simulator.py) 和 [Store.read_for_replay](../uta/store.py)。
 
 ```bash
 python -m uta scenario --db exercise.sqlite3 --account shock-demo --shards 4

@@ -356,7 +356,7 @@ class Simulator:
 
     def verify_replay(self, account_id):
         """Replay a stable event prefix with the recorded decision times."""
-        events = self.events(account_id)
+        snapshot, events = self.store.read_for_replay(_id(account_id))
         state = events[0]["command"]["state"]
         for event in events[1:]:
             command, original = event["command"], event["result"]
@@ -367,9 +367,8 @@ class Simulator:
             state["version"] = computed["version"] = event["version"]
             if computed != original:
                 raise SimulatorError(f"receipt differs at version {event['version']}")
-        current = self.store.read(_id(account_id))
-        if state != current:
-            raise SimulatorError("snapshot differs from replay or changed during verification; retry")
+        if state != snapshot:
+            raise SimulatorError("snapshot differs from replay")
         return {"account_id": account_id, "version": state["version"], "events_verified": len(events)}
 
     def execute(self, account_id, command_id, expected_version, command):
