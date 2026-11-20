@@ -2,6 +2,7 @@ import unittest
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal as D
+from decimal import MIN_EMIN, localcontext
 
 from uta.liquidation import (ActionType, LiquidationController, Phase,
                              PositionReduction, TimedRisk)
@@ -61,6 +62,60 @@ class LiquidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             c.next_action(self.snap("105", at=t), now=t,
                           reduction=PositionReduction("BTC", D("1"), D("2")))
+
+    def test_recovery_threshold_uses_exact_product(self):
+        c = self.controller
+        cancel = c.next_action(self.snap(), now=self.now)
+        c.acknowledge(cancel.action_id, success=True, now=self.now)
+        t = self.now + timedelta(seconds=1)
+
+        # The exact threshold is 101.2 at this maintenance margin.
+        with localcontext() as ctx:
+            ctx.prec = 2
+            for equity in ("101.19", "101.2"):
+                with self.subTest(equity=equity):
+                    self.assertIsNone(c.next_action(self.snap(equity, "92", at=t), now=t))
+                    self.assertEqual(c.phase, Phase.REDUCE_EXPOSURE)
+                    self.assertFalse(c.trading_allowed)
+            self.assertIsNone(c.next_action(self.snap("101.201", "92", at=t), now=t))
+        self.assertEqual(c.phase, Phase.RECOVERED)
+        self.assertTrue(c.trading_allowed)
+
+    def test_reduction_uses_exact_absolute_position_size(self):
+        c = self.controller
+        cancel = c.next_action(self.snap(), now=self.now)
+        c.acknowledge(cancel.action_id, success=True, now=self.now)
+        t = self.now + timedelta(seconds=1)
+
+        with localcontext() as ctx:
+            ctx.prec = 2
+            with self.assertRaisesRegex(ValueError, "invalid position reduction"):
+                c.next_action(self.snap(at=t), now=t,
+                              reduction=PositionReduction("BTC", D("-1.96"), D("1.97")))
+            action = c.next_action(self.snap(at=t), now=t,
+                                   reduction=PositionReduction("BTC", D("-1.96"), D("1.96")))
+        self.assertEqual((action.side, action.quantity, action.reduce_only), ("buy", D("1.96"), True))
+
+    def test_recovery_threshold_below_context_exponent_range(self):
+        c = self.controller
+        cancel = c.next_action(self.snap(), now=self.now)
+        c.acknowledge(cancel.action_id, success=True, now=self.now)
+        t = self.now + timedelta(seconds=1)
+
+        exponent = MIN_EMIN - 10
+        margin = D((0, (1,), exponent))
+        below_threshold = D((0, (1, 0, 9), exponent - 2))
+        exact_threshold = D((0, (1, 1), exponent - 1))
+        above_threshold = D((0, (1, 1, 1), exponent - 2))
+
+        for equity in (margin, below_threshold, exact_threshold):
+            with self.subTest(equity=equity):
+                self.assertIsNone(c.next_action(self.snap(equity, margin, at=t), now=t))
+                self.assertEqual(c.phase, Phase.REDUCE_EXPOSURE)
+                self.assertFalse(c.trading_allowed)
+        self.assertIsNone(c.next_action(self.snap(above_threshold, margin, at=t), now=t))
+        self.assertEqual(c.phase, Phase.RECOVERED)
+        self.assertTrue(c.trading_allowed)
 
     def test_stale_data_does_not_discard_pending_action(self):
         c = self.controller

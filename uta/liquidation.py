@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Context, Decimal, MAX_EMAX, MIN_EMIN
 from enum import Enum
 from typing import Protocol
 
@@ -52,6 +52,31 @@ class Action:
     side: str | None = None
     quantity: Decimal | None = None
     reduce_only: bool = False
+
+
+def _above_recovery_threshold(equity: Decimal, margin: Decimal, buffer: Decimal) -> bool:
+    """Compare equity with margin times the buffer over the finite Decimal range."""
+    if equity <= margin:
+        return False
+    if not margin:
+        return True
+
+    # Each positive significand is in [1, 10), so the product's adjusted
+    # exponent is either the sum of the operand exponents or one higher.
+    exponent_delta = equity.adjusted() - margin.adjusted() - buffer.adjusted()
+    if not 0 <= exponent_delta <= 1:
+        return exponent_delta > 1
+
+    # Compare on the product's scale to keep extreme exponents out of
+    # arithmetic. The product fits in the sum of the operand digit counts.
+    margin_digits = margin.as_tuple().digits
+    buffer_digits = buffer.as_tuple().digits
+    equity_digits = equity.as_tuple().digits
+    scaled_margin = Decimal((0, margin_digits, 1 - len(margin_digits)))
+    scaled_buffer = Decimal((0, buffer_digits, 1 - len(buffer_digits)))
+    scaled_equity = Decimal((0, equity_digits, exponent_delta + 1 - len(equity_digits)))
+    context = Context(prec=len(margin_digits) + len(buffer_digits), Emin=MIN_EMIN, Emax=MAX_EMAX)
+    return scaled_equity > context.multiply(scaled_margin, scaled_buffer)
 
 
 class LiquidationController:
@@ -140,7 +165,7 @@ class LiquidationController:
                 return None
             self._cycle += 1
             self.phase = self._active_phase = Phase.CANCEL_ORDERS
-        elif equity > mm * self.recovery_buffer:
+        elif _above_recovery_threshold(equity, mm, self.recovery_buffer):
             self.phase = self._active_phase = Phase.RECOVERED
             self._can_trade = True
             return None
@@ -157,7 +182,7 @@ class LiquidationController:
                     or not isinstance(reduction.quantity, Decimal)
                     or not reduction.position_size.is_finite() or not reduction.quantity.is_finite()
                     or reduction.position_size == 0 or reduction.quantity <= 0
-                    or reduction.quantity > abs(reduction.position_size)):
+                    or reduction.quantity > reduction.position_size.copy_abs()):
                 self._sequence -= 1
                 raise ValueError("invalid position reduction")
             side = "sell" if reduction.position_size > 0 else "buy"
